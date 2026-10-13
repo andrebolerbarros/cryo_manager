@@ -24,7 +24,10 @@ if material == "Embryo":
     )
 
 c6, c7 = st.columns(2)
-lab = c6.text_input("Lab").strip()
+existing_labs = db.labs()
+NEW_LAB = "➕ New lab…"
+lab_choice = c6.selectbox("Lab", [*existing_labs, NEW_LAB])
+lab = (c6.text_input("New lab name") if lab_choice == NEW_LAB else lab_choice).strip()
 agendo_id = c7.text_input("Agendo ID").strip()
 
 c4, c5 = st.columns(2)
@@ -46,6 +49,8 @@ if st.button("Save", type="primary"):
         )
     if not lab:
         errors.append("Lab is required.")
+    elif lab_choice == NEW_LAB and lab.casefold() in {l.casefold() for l in existing_labs}:
+        errors.append(f"Lab '{lab}' already exists (case-insensitive) — pick it from the list.")
     if not shelf or not position:
         errors.append("Shelf ID and position are required.")
     if not errors:

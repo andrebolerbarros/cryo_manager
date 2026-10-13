@@ -66,6 +66,13 @@ def strains() -> list[str]:
         return [r[0] for r in rows]
 
 
+def labs() -> list[str]:
+    with connect() as con:
+        rows = con.execute(
+            "SELECT DISTINCT lab FROM batches WHERE lab <> '' ORDER BY lab COLLATE NOCASE")
+        return [r[0] for r in rows]
+
+
 def overlap(strain: str, material: str, start: int, end: int) -> pd.DataFrame:
     """Existing batches of the same strain+material whose straw-ID range intersects [start, end]."""
     with connect() as con:
