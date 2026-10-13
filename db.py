@@ -237,10 +237,10 @@ def recent_thaws(limit: int = 20) -> pd.DataFrame:
             " ORDER BY s.thawed_at DESC, s.id DESC LIMIT ?", con, params=(limit,))
 
 
-def add_plan(agendo_id: str, strain_id: str, comment: str, animals: list[dict]) -> None:
+def add_plan(agendo_id: str, strain_id: str, animals: list[dict]) -> None:
     with connect() as con:
         con.execute("INSERT INTO plans (agendo_id, strain_id, comment, animals) VALUES (?,?,?,?)",
-                    (agendo_id, strain_id, comment, json.dumps(animals)))
+                    (agendo_id, strain_id, "", json.dumps(animals)))  # comment column kept for old rows
 
 
 def plans() -> list[dict]:
