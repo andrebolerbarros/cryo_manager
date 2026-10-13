@@ -14,7 +14,8 @@ if df.empty:
     st.warning(f"No line matches '{q}'.")
     st.stop()
 
-COLS = {"start_id": "From", "end_id": "To", "n_straws": "Straws", "shelf": "Shelf", "position": "Position"}
+COLS = {"start_id": "From", "end_id": "To", "n_straws": "Straws", "shelf": "Shelf", "position": "Position",
+        "lab": "Lab", "agendo_id": "Agendo ID"}
 
 for strain, g in df.groupby("strain", sort=False):
     st.subheader(strain)

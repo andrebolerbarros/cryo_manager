@@ -23,6 +23,10 @@ if material == "Embryo":
         help="Summed across all straws; feeds the 'total embryos' counter on the search page.",
     )
 
+c6, c7 = st.columns(2)
+lab = c6.text_input("Lab").strip()
+agendo_id = c7.text_input("Agendo ID").strip()
+
 c4, c5 = st.columns(2)
 shelf = c4.text_input("Shelf ID").strip()
 position = c5.text_input("Position in shelf", placeholder="e.g. Rack A, Row 2").strip()
@@ -40,6 +44,8 @@ if st.button("Save", type="primary"):
             f"Number of straws ({n_straws}) does not match the ID range "
             f"{start_id}–{end_id} ({end_id - start_id + 1} straws)."
         )
+    if not lab:
+        errors.append("Lab is required.")
     if not shelf or not position:
         errors.append("Shelf ID and position are required.")
     if not errors:
@@ -55,5 +61,5 @@ if st.button("Save", type="primary"):
             st.error(e)
     else:
         db.add_batch(strain, material, int(n_straws), int(start_id), int(end_id),
-                     int(n_embryos) if n_embryos else None, shelf, position)
+                     int(n_embryos) if n_embryos else None, shelf, position, lab, agendo_id)
         st.success(f"Saved {n_straws} {material.lower()} straw(s) for {strain}.")
