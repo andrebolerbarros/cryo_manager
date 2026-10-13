@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS straws (
     UNIQUE (batch_id, straw_no)
 );
 
+CREATE TABLE IF NOT EXISTS requests (
+    agendo_id TEXT PRIMARY KEY COLLATE NOCASE,
+    strain_id TEXT NOT NULL,
+    lab       TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS plans (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     agendo_id  TEXT NOT NULL,
@@ -70,6 +76,16 @@ SEED = [
 ]
 
 
+REQUESTS_SEED = [
+    # agendo_id, strain_id, lab
+    ("AG-2001", "GDF15 KO", "Lab Silva"),
+    ("AG-2002", "FXR KO", "Lab Costa"),
+    ("AG-2003", "Olfr56 KO", "Lab Silva"),
+    ("AG-2004", "CXCL5 KO", "Lab Costa"),
+    ("AG-2005", "B6J", "Core Facility"),
+]
+
+
 def connect() -> sqlite3.Connection:
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
@@ -89,6 +105,7 @@ def connect() -> sqlite3.Connection:
 def _sync_labs(con: sqlite3.Connection) -> None:
     """Every lab already used by a batch must exist in the labs list."""
     con.execute("INSERT OR IGNORE INTO labs (name) SELECT DISTINCT lab FROM batches WHERE lab <> ''")
+    con.execute("INSERT OR IGNORE INTO labs (name) SELECT DISTINCT lab FROM requests WHERE lab <> ''")
 
 
 def _insert_straws(con, batch_id, material, start_id, n_straws, n_embryos) -> None:
@@ -128,6 +145,26 @@ def seed_if_empty() -> None:
             for row in SEED:
                 _insert_batch(con, *row)
             _sync_labs(con)
+        # toy open requests, only into a database that has neither requests nor plans yet
+        if (con.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 0
+                and con.execute("SELECT COUNT(*) FROM plans").fetchone()[0] == 0):
+            con.executemany("INSERT INTO requests (agendo_id, strain_id, lab) VALUES (?,?,?)", REQUESTS_SEED)
+            _sync_labs(con)
+
+
+def requests() -> list[dict]:
+    """Open Agendo requests, each tied to one strain and one lab."""
+    with connect() as con:
+        return [dict(r) for r in con.execute("SELECT * FROM requests ORDER BY agendo_id COLLATE NOCASE")]
+
+
+def add_request(agendo_id: str, strain_id: str, lab: str) -> bool:
+    """Returns False if this Agendo ID (case-insensitive) already exists."""
+    with connect() as con:
+        cur = con.execute("INSERT OR IGNORE INTO requests (agendo_id, strain_id, lab) VALUES (?,?,?)",
+                          (agendo_id.strip(), strain_id.strip(), lab))
+        _sync_labs(con)
+        return cur.rowcount == 1
 
 
 def strains() -> list[str]:
