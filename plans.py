@@ -1,4 +1,4 @@
-"""Helpers for 'Winter is coming': validate animal rows and format sex × DOB (age in weeks)."""
+"""Helpers for 'Winter is coming': validate animal rows, merge by age in weeks, format."""
 from datetime import date
 
 import pandas as pd
@@ -10,14 +10,39 @@ def age_weeks(dob: str, today: date | None = None) -> int:
     return ((today or date.today()) - date.fromisoformat(dob)).days // 7
 
 
-def format_animals(animals: list[dict], today: date | None = None) -> str:
-    """'3 ♀ × 14-09-2026 (4w) · 2 ♂ × 02-09-2026 (6w)' — age is computed against `today`."""
-    parts = []
+def merge_by_weeks(animals: list[dict], today: date | None = None) -> list[dict]:
+    """Group animals of the same sex and the same whole number of weeks old (4.3w and 4.1w -> 4w).
+
+    Returns rows sorted by age (youngest first), then sex:
+    {'sex', 'weeks', 'n', 'dobs': [(iso_dob, n), ...]}
+    """
+    groups: dict[tuple[int, str], dict] = {}
     for a in animals:
-        d = date.fromisoformat(a["dob"])
-        parts.append(f"{a['n']} {'♀' if a['sex'] == 'F' else '♂'} × {d.strftime('%d-%m-%Y')} "
-                     f"({age_weeks(a['dob'], today)}w)")
-    return " · ".join(parts)
+        g = groups.setdefault((age_weeks(a["dob"], today), a["sex"]),
+                              {"sex": a["sex"], "weeks": age_weeks(a["dob"], today), "n": 0, "dobs": {}})
+        g["n"] += a["n"]
+        g["dobs"][a["dob"]] = g["dobs"].get(a["dob"], 0) + a["n"]
+    rows = sorted(groups.values(), key=lambda g: (g["weeks"], g["sex"]))
+    for g in rows:
+        g["dobs"] = sorted(g["dobs"].items())
+    return rows
+
+
+def format_sex_age(row: dict) -> str:
+    return f"{row['n']} {'♀' if row['sex'] == 'F' else '♂'} × {row['weeks']}w"
+
+
+def format_dobs(row: dict) -> str:
+    """'14-09-2026' or, when several DOBs were merged, '14-09-2026 (3) · 16-09-2026 (2)'."""
+    fmt = lambda iso: date.fromisoformat(iso).strftime("%d-%m-%Y")
+    if len(row["dobs"]) == 1:
+        return fmt(row["dobs"][0][0])
+    return " · ".join(f"{fmt(d)} ({n})" for d, n in row["dobs"])
+
+
+def format_animals(animals: list[dict], today: date | None = None) -> str:
+    """One-line summary, e.g. '3 ♀ × 4w · 2 ♂ × 6w'."""
+    return " · ".join(format_sex_age(r) for r in merge_by_weeks(animals, today))
 
 
 def rows_to_animals(df: pd.DataFrame, today: date | None = None) -> tuple[list[dict], list[str]]:

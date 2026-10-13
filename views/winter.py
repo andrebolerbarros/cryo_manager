@@ -11,9 +11,15 @@ for msg in st.session_state.pop("flash_winter", []):
 
 v = st.session_state.setdefault("winter_v", 0)  # bump to clear the form after a successful save
 
-c1, c2 = st.columns(2)
+c1, c2, c3 = st.columns(3)
 agendo_id = c1.text_input("Agendo ID", key=f"w_agendo_{v}").strip()
 strain_id = c2.text_input("Strain ID", key=f"w_strain_{v}").strip()
+all_labs = db.labs()
+if all_labs:
+    lab = c3.selectbox("Lab", all_labs, key=f"w_lab_{v}")
+else:
+    lab = ""
+    c3.warning("No labs yet — add one on 'New gang joining!'.")
 
 st.markdown("**Animals** — one row per sex × DOB (“+” top right adds a row)")
 empty = pd.DataFrame({
@@ -36,15 +42,17 @@ if st.button("Let's get planning!", type="primary"):
         errors.append("Agendo ID is required.")
     if not strain_id:
         errors.append("Strain ID is required.")
+    if not lab:
+        errors.append("Lab is required (add it on 'New gang joining!').")
     animals, problems = plans.rows_to_animals(rows)
     errors += problems
     if errors:
         for e in errors:
             st.error(e)
     else:
-        db.add_plan(agendo_id, strain_id, animals)
+        db.add_plan(agendo_id, strain_id, lab, animals)
         st.session_state["flash_winter"] = [
-            f"Planned {strain_id} ({agendo_id}): {plans.format_animals(animals)}"]
+            f"Planned {strain_id} ({lab}, {agendo_id}): {plans.format_animals(animals)}"]
         st.session_state["winter_v"] = v + 1
         st.rerun()
 
@@ -53,9 +61,14 @@ saved = db.plans()
 if not saved:
     st.caption("Nothing planned yet.")
 else:
-    st.caption("Age in weeks is calculated against today's date.")
-    st.dataframe(
-        [{"Strain ID": r["strain_id"], "Agendo ID": r["agendo_id"],
-          "Animals (sex × DOB, age)": plans.format_animals(r["animals"])} for r in saved],
-        hide_index=True, use_container_width=True,
-    )
+    st.caption("Age = whole weeks since birth, calculated against today; animals of the same sex "
+               "and the same number of weeks are merged.")
+    for r in saved:
+        st.markdown(f"### {r['strain_id']}\n"
+                    f"- **Lab:** {r['lab'] or '—'}\n"
+                    f"- **Agendo request ID:** {r['agendo_id']}")
+        st.dataframe(
+            [{"Sex × age": plans.format_sex_age(g), "DOB": plans.format_dobs(g)}
+             for g in plans.merge_by_weeks(r["animals"])],
+            hide_index=True, use_container_width=True,
+        )

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS plans (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     agendo_id  TEXT NOT NULL,
     strain_id  TEXT NOT NULL,
+    lab        TEXT NOT NULL DEFAULT '',
     comment    TEXT NOT NULL,
     animals    TEXT NOT NULL,         -- JSON: [{"sex": "F", "dob": "2026-01-15", "n": 3}, ...]
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -77,6 +78,8 @@ def connect() -> sqlite3.Connection:
     for c in ("lab", "agendo_id"):  # migrate DBs created before these columns existed
         if c not in cols:
             con.execute(f"ALTER TABLE batches ADD COLUMN {c} TEXT NOT NULL DEFAULT ''")
+    if "lab" not in {r[1] for r in con.execute("PRAGMA table_info(plans)")}:
+        con.execute("ALTER TABLE plans ADD COLUMN lab TEXT NOT NULL DEFAULT ''")
     _sync_labs(con)
     _populate_straws(con)
     con.commit()  # leave no implicit transaction open (thaw_straws starts its own)
@@ -237,10 +240,10 @@ def recent_thaws(limit: int = 20) -> pd.DataFrame:
             " ORDER BY s.thawed_at DESC, s.id DESC LIMIT ?", con, params=(limit,))
 
 
-def add_plan(agendo_id: str, strain_id: str, animals: list[dict]) -> None:
+def add_plan(agendo_id: str, strain_id: str, lab: str, animals: list[dict]) -> None:
     with connect() as con:
-        con.execute("INSERT INTO plans (agendo_id, strain_id, comment, animals) VALUES (?,?,?,?)",
-                    (agendo_id, strain_id, "", json.dumps(animals)))  # comment column kept for old rows
+        con.execute("INSERT INTO plans (agendo_id, strain_id, lab, comment, animals) VALUES (?,?,?,?,?)",
+                    (agendo_id, strain_id, lab, "", json.dumps(animals)))  # comment column kept for old rows
 
 
 def plans() -> list[dict]:
