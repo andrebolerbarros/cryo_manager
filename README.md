@@ -13,5 +13,7 @@ streamlit run streamlit_app.py
 - **Let's warm up!**: tick individual straws and press *warm it up!*; thawed straws leave the inventory
   (kept in the DB with a timestamp, so straw IDs are never reused).
 - **Search**: substring match on line name; totals shown per line.
-- **Look at my kingdom!**: per-lab table of embryos, embryo straws and sperm straws per strain.
+- **Winter is coming**: plan entries (Agendo ID, Strain ID, comment). The comment must give number of
+  females/males + DOB per line, e.g. `3 females DOB 2026-01-15`; dates are read day-first.
+- **Look at my kingdom!**: pick a lab; table of embryos, embryo straws and sperm straws per strain.
 - **New gang joining!**: add labs; they feed the Lab dropdown.

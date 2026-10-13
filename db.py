@@ -4,6 +4,7 @@ batches = the original freezing submissions (immutable).
 straws  = one row per physical straw; thawing sets thawed_at (never deleted, so there is a history
           and straw IDs can't be reused by accident).
 """
+import json
 import sqlite3
 from pathlib import Path
 
@@ -40,6 +41,15 @@ CREATE TABLE IF NOT EXISTS straws (
     n_embryos  INTEGER,               -- embryos in this straw (Embryo only)
     thawed_at  TEXT,                  -- NULL = still in the freezer
     UNIQUE (batch_id, straw_no)
+);
+
+CREATE TABLE IF NOT EXISTS plans (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    agendo_id  TEXT NOT NULL,
+    strain_id  TEXT NOT NULL,
+    comment    TEXT NOT NULL,
+    animals    TEXT NOT NULL,         -- JSON: [{"sex": "F", "dob": "2026-01-15", "n": 3}, ...]
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -152,16 +162,19 @@ def add_batch(strain, material, n_straws, start_id, end_id, n_embryos, shelf, po
                       shelf, position, lab, agendo_id)
 
 
-def live_straws(strain_like: str = "", lab_like: str = "") -> pd.DataFrame:
-    """Every straw still in the freezer (one row each); case-insensitive substring filters."""
+def live_straws(strain_like: str = "", lab_like: str = "", exact_lab: str | None = None) -> pd.DataFrame:
+    """Every straw still in the freezer (one row each); case-insensitive substring filters,
+    or exact_lab for an exact (case-insensitive) lab match."""
     with connect() as con:
         return pd.read_sql_query(
             "SELECT s.id AS straw_id, s.batch_id, s.straw_no, s.n_embryos, b.strain, b.material,"
             " b.lab, b.agendo_id, b.shelf, b.position"
             " FROM straws s JOIN batches b ON b.id = s.batch_id"
             " WHERE s.thawed_at IS NULL AND b.strain LIKE ? AND b.lab LIKE ?"
+            + (" AND b.lab = ? COLLATE NOCASE" if exact_lab is not None else "") +
             " ORDER BY b.strain COLLATE NOCASE, b.material, b.shelf, b.position, b.id, s.straw_no",
-            con, params=(f"%{strain_like.strip()}%", f"%{lab_like.strip()}%"))
+            con, params=(f"%{strain_like.strip()}%", f"%{lab_like.strip()}%",
+                         *([exact_lab] if exact_lab is not None else [])))
 
 
 def _ranges(nums) -> str:
@@ -222,3 +235,16 @@ def recent_thaws(limit: int = 20) -> pd.DataFrame:
             "SELECT s.thawed_at, b.strain, b.material, s.straw_no, s.n_embryos, b.lab"
             " FROM straws s JOIN batches b ON b.id = s.batch_id WHERE s.thawed_at IS NOT NULL"
             " ORDER BY s.thawed_at DESC, s.id DESC LIMIT ?", con, params=(limit,))
+
+
+def add_plan(agendo_id: str, strain_id: str, comment: str, animals: list[dict]) -> None:
+    with connect() as con:
+        con.execute("INSERT INTO plans (agendo_id, strain_id, comment, animals) VALUES (?,?,?,?)",
+                    (agendo_id, strain_id, comment, json.dumps(animals)))
+
+
+def plans() -> list[dict]:
+    """Newest first; 'animals' is already decoded."""
+    with connect() as con:
+        rows = con.execute("SELECT * FROM plans ORDER BY id DESC").fetchall()
+    return [{**dict(r), "animals": json.loads(r["animals"])} for r in rows]
