@@ -1,4 +1,9 @@
-"""SQLite storage for cryopreserved batches. One row = one contiguous block of straws."""
+"""SQLite storage for cryopreserved material.
+
+batches = the original freezing submissions (immutable).
+straws  = one row per physical straw; thawing sets thawed_at (never deleted, so there is a history
+          and straw IDs can't be reused by accident).
+"""
 import sqlite3
 from pathlib import Path
 
@@ -15,7 +20,7 @@ CREATE TABLE IF NOT EXISTS batches (
     n_straws    INTEGER NOT NULL CHECK (n_straws > 0),
     start_id    INTEGER NOT NULL,
     end_id      INTEGER NOT NULL,
-    n_embryos   INTEGER,              -- only meaningful for Embryo
+    n_embryos   INTEGER,              -- batch total; only meaningful for Embryo
     lab         TEXT    NOT NULL DEFAULT '',
     agendo_id   TEXT    NOT NULL DEFAULT '',
     shelf       TEXT    NOT NULL,
@@ -28,19 +33,13 @@ CREATE TABLE IF NOT EXISTS labs (
     name TEXT PRIMARY KEY COLLATE NOCASE
 );
 
-CREATE TABLE IF NOT EXISTS thaw_log (
+CREATE TABLE IF NOT EXISTS straws (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    strain     TEXT    NOT NULL,
-    material   TEXT    NOT NULL,
-    n_straws   INTEGER NOT NULL,
-    first_id   INTEGER NOT NULL,
-    last_id    INTEGER NOT NULL,
-    n_embryos  INTEGER,
-    lab        TEXT    NOT NULL DEFAULT '',
-    agendo_id  TEXT    NOT NULL DEFAULT '',
-    shelf      TEXT    NOT NULL,
-    position   TEXT    NOT NULL,
-    thawed_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+    batch_id   INTEGER NOT NULL REFERENCES batches(id),
+    straw_no   INTEGER NOT NULL,
+    n_embryos  INTEGER,               -- embryos in this straw (Embryo only)
+    thawed_at  TEXT,                  -- NULL = still in the freezer
+    UNIQUE (batch_id, straw_no)
 );
 """
 
@@ -69,7 +68,8 @@ def connect() -> sqlite3.Connection:
         if c not in cols:
             con.execute(f"ALTER TABLE batches ADD COLUMN {c} TEXT NOT NULL DEFAULT ''")
     _sync_labs(con)
-    con.commit()  # leave no implicit transaction open (thaw_many starts its own)
+    _populate_straws(con)
+    con.commit()  # leave no implicit transaction open (thaw_straws starts its own)
     return con
 
 
@@ -78,14 +78,42 @@ def _sync_labs(con: sqlite3.Connection) -> None:
     con.execute("INSERT OR IGNORE INTO labs (name) SELECT DISTINCT lab FROM batches WHERE lab <> ''")
 
 
+def _insert_straws(con, batch_id, material, start_id, n_straws, n_embryos) -> None:
+    """Spread the batch's embryo total over its straws (integers that sum exactly to the total)."""
+    if material == "Embryo" and n_embryos is not None:
+        base, rem = divmod(n_embryos, n_straws)
+        per = [base + (1 if i < rem else 0) for i in range(n_straws)]
+    else:
+        per = [None] * n_straws
+    con.executemany(
+        "INSERT INTO straws (batch_id, straw_no, n_embryos) VALUES (?,?,?)",
+        [(batch_id, start_id + i, per[i]) for i in range(n_straws)])
+
+
+def _populate_straws(con: sqlite3.Connection) -> None:
+    """Create straw rows for batches saved before the straws table existed."""
+    rows = con.execute(
+        "SELECT id, material, start_id, n_straws, n_embryos FROM batches b"
+        " WHERE NOT EXISTS (SELECT 1 FROM straws s WHERE s.batch_id = b.id)").fetchall()
+    for r in rows:
+        _insert_straws(con, r["id"], r["material"], r["start_id"], r["n_straws"], r["n_embryos"])
+
+
+def _insert_batch(con, strain, material, n_straws, start_id, end_id, n_embryos,
+                  shelf, position, lab, agendo_id) -> None:
+    n_embryos = n_embryos if material == "Embryo" else None
+    cur = con.execute(
+        "INSERT INTO batches (strain, material, n_straws, start_id, end_id, n_embryos,"
+        " shelf, position, lab, agendo_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (strain, material, n_straws, start_id, end_id, n_embryos, shelf, position, lab, agendo_id))
+    _insert_straws(con, cur.lastrowid, material, start_id, n_straws, n_embryos)
+
+
 def seed_if_empty() -> None:
     with connect() as con:
         if con.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == 0:
-            con.executemany(
-                "INSERT INTO batches (strain, material, n_straws, start_id, end_id,"
-                " n_embryos, shelf, position, lab, agendo_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                SEED,
-            )
+            for row in SEED:
+                _insert_batch(con, *row)
             _sync_labs(con)
 
 
@@ -108,75 +136,89 @@ def add_lab(name: str) -> bool:
 
 
 def overlap(strain: str, material: str, start: int, end: int) -> pd.DataFrame:
-    """Existing batches of the same strain+material whose straw-ID range intersects [start, end]."""
+    """Earlier batches of the same strain+material whose straw-ID range intersects [start, end].
+    Includes straws that were already thawed, so IDs are never reused."""
     with connect() as con:
         return pd.read_sql_query(
             "SELECT * FROM batches WHERE strain = ? COLLATE NOCASE AND material = ?"
             " AND start_id <= ? AND end_id >= ?",
-            con, params=(strain, material, end, start),
-        )
+            con, params=(strain, material, end, start))
 
 
 def add_batch(strain, material, n_straws, start_id, end_id, n_embryos, shelf, position,
               lab, agendo_id) -> None:
     with connect() as con:
-        con.execute(
-            "INSERT INTO batches (strain, material, n_straws, start_id, end_id,"
-            " n_embryos, shelf, position, lab, agendo_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (strain, material, n_straws, start_id, end_id,
-             n_embryos if material == "Embryo" else None, shelf, position, lab, agendo_id),
-        )
+        _insert_batch(con, strain, material, n_straws, start_id, end_id, n_embryos,
+                      shelf, position, lab, agendo_id)
 
 
-def search(query: str) -> pd.DataFrame:
-    """Case-insensitive substring match on strain name."""
+def live_straws(strain_like: str = "", lab_like: str = "") -> pd.DataFrame:
+    """Every straw still in the freezer (one row each); case-insensitive substring filters."""
     with connect() as con:
         return pd.read_sql_query(
-            "SELECT * FROM batches WHERE strain LIKE ? ORDER BY strain COLLATE NOCASE, material, start_id",
-            con, params=(f"%{query.strip()}%",),
-        )
+            "SELECT s.id AS straw_id, s.batch_id, s.straw_no, s.n_embryos, b.strain, b.material,"
+            " b.lab, b.agendo_id, b.shelf, b.position"
+            " FROM straws s JOIN batches b ON b.id = s.batch_id"
+            " WHERE s.thawed_at IS NULL AND b.strain LIKE ? AND b.lab LIKE ?"
+            " ORDER BY b.strain COLLATE NOCASE, b.material, b.shelf, b.position, b.id, s.straw_no",
+            con, params=(f"%{strain_like.strip()}%", f"%{lab_like.strip()}%"))
 
 
-def thaw_many(selection: dict[int, int]) -> list[dict]:
-    """Thaw k straws from each batch id in `selection` ({batch_id: k}), all-or-nothing.
+def _ranges(nums) -> str:
+    """[1,2,3,7,9,10] -> '1–3, 7, 9–10'"""
+    nums, out = sorted(nums), []
+    i = 0
+    while i < len(nums):
+        j = i
+        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
+            j += 1
+        out.append(str(nums[i]) if i == j else f"{nums[i]}–{nums[j]}")
+        i = j + 1
+    return ", ".join(out)
 
-    Straws are taken from the low end of the ID range, so the remainder stays contiguous.
-    Embryos are removed pro rata (assumes the same number of embryos per straw);
-    thawing a whole batch removes all of its embryos. Every thaw is written to thaw_log.
-    """
-    done = []
+
+def summarize_batches(straws: pd.DataFrame) -> pd.DataFrame:
+    """Collapse live straws to one row per batch: ID ranges, straw count, embryo total."""
+    rows = []
+    for _, g in straws.groupby("batch_id", sort=False):
+        f = g.iloc[0]
+        rows.append({
+            "strain": f.strain, "material": f.material, "lab": f.lab, "agendo_id": f.agendo_id,
+            "shelf": f.shelf, "position": f.position, "ids": _ranges(g.straw_no.tolist()),
+            "n_straws": len(g),
+            "n_embryos": int(g.n_embryos.sum()) if f.material == "Embryo" else None,
+        })
+    return pd.DataFrame(rows, columns=["strain", "material", "lab", "agendo_id", "shelf",
+                                       "position", "ids", "n_straws", "n_embryos"])
+
+
+def thaw_straws(straw_ids: list[int]) -> list[dict]:
+    """Mark the given straws as thawed, all-or-nothing. Fails if any is already gone."""
+    ids = sorted({int(i) for i in straw_ids})
+    marks = ",".join("?" * len(ids))
     with connect() as con:
         con.execute("BEGIN IMMEDIATE")
-        for batch_id, k in selection.items():
-            r = con.execute("SELECT * FROM batches WHERE id = ?", (batch_id,)).fetchone()
-            if r is None:
-                raise ValueError("A selected batch no longer exists — reload the page.")
-            if not 1 <= k <= r["n_straws"]:
-                raise ValueError(
-                    f"{r['strain']} {r['material'].lower()}: asked for {k} straw(s) but only "
-                    f"{r['n_straws']} left — reload the page.")
-            emb = None
-            if r["n_embryos"] is not None:
-                emb = r["n_embryos"] if k == r["n_straws"] else r["n_embryos"] * k // r["n_straws"]
-            first, last = r["start_id"], r["start_id"] + k - 1
-            con.execute(
-                "INSERT INTO thaw_log (strain, material, n_straws, first_id, last_id, n_embryos,"
-                " lab, agendo_id, shelf, position) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (r["strain"], r["material"], k, first, last, emb,
-                 r["lab"], r["agendo_id"], r["shelf"], r["position"]))
-            if k == r["n_straws"]:
-                con.execute("DELETE FROM batches WHERE id = ?", (batch_id,))
-            else:
-                con.execute(
-                    "UPDATE batches SET start_id = ?, n_straws = n_straws - ?, n_embryos = ? WHERE id = ?",
-                    (last + 1, k, None if emb is None else r["n_embryos"] - emb, batch_id))
-            done.append({"strain": r["strain"], "material": r["material"],
-                         "straws": k, "ids": (first, last), "embryos": emb})
-    return done
+        rows = con.execute(
+            "SELECT s.id, s.straw_no, s.n_embryos, s.thawed_at, b.strain, b.material"
+            f" FROM straws s JOIN batches b ON b.id = s.batch_id WHERE s.id IN ({marks})",
+            ids).fetchall()
+        if len(rows) != len(ids) or any(r["thawed_at"] is not None for r in rows):
+            raise ValueError("Some selected straws are no longer in the freezer — reload the page.")
+        con.execute(f"UPDATE straws SET thawed_at = CURRENT_TIMESTAMP WHERE id IN ({marks})", ids)
+    out: dict[tuple, dict] = {}
+    for r in rows:
+        d = out.setdefault((r["strain"], r["material"]),
+                           {"strain": r["strain"], "material": r["material"], "nums": [], "embryos": 0})
+        d["nums"].append(r["straw_no"])
+        d["embryos"] += r["n_embryos"] or 0
+    return [{"strain": d["strain"], "material": d["material"], "straws": len(d["nums"]),
+             "ids": _ranges(d["nums"]), "embryos": d["embryos"] if d["material"] == "Embryo" else None}
+            for d in out.values()]
 
 
-def recent_thaws(limit: int = 15) -> pd.DataFrame:
+def recent_thaws(limit: int = 20) -> pd.DataFrame:
     with connect() as con:
         return pd.read_sql_query(
-            "SELECT thawed_at, strain, material, n_straws, first_id, last_id, n_embryos, lab"
-            " FROM thaw_log ORDER BY id DESC LIMIT ?", con, params=(limit,))
+            "SELECT s.thawed_at, b.strain, b.material, s.straw_no, s.n_embryos, b.lab"
+            " FROM straws s JOIN batches b ON b.id = s.batch_id WHERE s.thawed_at IS NOT NULL"
+            " ORDER BY s.thawed_at DESC, s.id DESC LIMIT ?", con, params=(limit,))

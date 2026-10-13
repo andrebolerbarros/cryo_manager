@@ -10,5 +10,6 @@ st.navigation([
     st.Page("views/freeze.py", title="Let's get freezing", icon="❄️", url_path="freeze"),
     st.Page("views/warm.py", title="Let's warm up!", icon="🔥", url_path="warm"),
     st.Page("views/search.py", title="Search", icon="🔎"),
-    st.Page("views/new_lab.py", title="New Lab", icon="🏷️", url_path="new-lab"),
+    st.Page("views/kingdom.py", title="Look at my kingdom!", icon="👑", url_path="kingdom"),
+    st.Page("views/new_gang.py", title="New gang joining!", icon="🤝", url_path="new-gang"),
 ]).run()

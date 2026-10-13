@@ -12,56 +12,59 @@ if not q.strip():
     st.caption(f"Known lines: {', '.join(db.strains()) or '— none yet —'}")
     st.stop()
 
-df = db.search(q)
+df = db.live_straws(strain_like=q)
 if df.empty:
-    st.warning(f"No line matches '{q}'.")
+    st.warning(f"No straws in the freezer for '{q}'.")
     st.stop()
 
-WIDTHS = [2, 1.5, 2.5, 2, 1.3, 1.6, 2]
-selection: dict[int, int] = {}
+version = st.session_state.setdefault("warm_version", 0)  # bump to reset the tick boxes after a thaw
+selected: list[int] = []
 
 for strain, g in df.groupby("strain", sort=False):
     st.subheader(strain)
     for material in db.MATERIALS:
         part = g[g.material == material]
-        st.markdown(f"**{material}**")
+        st.markdown(f"**{material}** — {len(part)} straw(s)")
         if part.empty:
             st.caption("None stored.")
             continue
-        for col, h in zip(st.columns(WIDTHS),
-                          ["Straw IDs", "Shelf", "Position", "Lab", "Straws", "Embryos", "Straws to thaw"]):
-            col.caption(h)
-        for r in part.itertuples():
-            c = st.columns(WIDTHS)
-            c[0].write(f"{r.start_id}–{r.end_id}" if r.n_straws > 1 else f"{r.start_id}")
-            c[1].write(r.shelf)
-            c[2].write(r.position)
-            c[3].write(r.lab or "—")
-            c[4].write(str(r.n_straws))
-            c[5].write("—" if material == "Sperm" or r.n_embryos != r.n_embryos else str(int(r.n_embryos)))
-            # key carries n_straws so the widget resets after a thaw changes the batch
-            k = c[6].selectbox("Straws to thaw", range(r.n_straws + 1),
-                               key=f"thaw_{r.id}_{r.n_straws}", label_visibility="collapsed")
-            if k:
-                selection[r.id] = k
+        cols = ["straw_no", "shelf", "position", "lab", "agendo_id"]
+        if material == "Embryo":
+            cols.append("n_embryos")
+        tbl = part.set_index("straw_id")[cols].copy()
+        tbl["thaw"] = False
+        edited = st.data_editor(
+            tbl,
+            key=f"warm_{version}_{strain}_{material}_{q}",
+            hide_index=True,
+            use_container_width=True,
+            disabled=cols,
+            column_config={
+                "straw_no": "Straw ID", "shelf": "Shelf", "position": "Position", "lab": "Lab",
+                "agendo_id": "Agendo ID", "n_embryos": "Embryos",
+                "thaw": st.column_config.CheckboxColumn("Thaw?"),
+            },
+        )
+        selected += [int(i) for i in edited.index[edited["thaw"]]]
     st.divider()
 
+st.caption(f"{len(selected)} straw(s) selected")
 if st.button("warm it up!", type="primary"):
-    if not selection:
-        st.info("Nothing selected — pick a number of straws in the last column.")
+    if not selected:
+        st.info("Nothing selected — tick the boxes in the last column.")
     else:
         try:
-            done = db.thaw_many(selection)
+            done = db.thaw_straws(selected)
         except ValueError as e:
             st.error(str(e))
         else:
             st.session_state["flash"] = [
-                f"{d['strain']} · {d['material']}: thawed {d['straws']} straw(s), IDs "
-                f"{d['ids'][0]}–{d['ids'][1]}"
+                f"{d['strain']} · {d['material']}: thawed {d['straws']} straw(s), IDs {d['ids']}"
                 + (f" ({d['embryos']} embryos)." if d["embryos"] is not None else ".")
                 for d in done
             ]
-            st.rerun()  # redraw the table with the updated inventory
+            st.session_state["warm_version"] = version + 1
+            st.rerun()  # redraw with the updated inventory
 
 with st.expander("Recent thaws"):
     log = db.recent_thaws()

@@ -9,15 +9,15 @@ if not q.strip():
     st.caption(f"Known lines: {', '.join(db.strains()) or '— none yet —'}")
     st.stop()
 
-df = db.search(q)
-if df.empty:
-    st.warning(f"No line matches '{q}'.")
+batches = db.summarize_batches(db.live_straws(strain_like=q))
+if batches.empty:
+    st.warning(f"No straws in the freezer for '{q}'.")
     st.stop()
 
-COLS = {"start_id": "From", "end_id": "To", "n_straws": "Straws", "shelf": "Shelf", "position": "Position",
+COLS = {"ids": "Straw IDs", "n_straws": "Straws", "shelf": "Shelf", "position": "Position",
         "lab": "Lab", "agendo_id": "Agendo ID"}
 
-for strain, g in df.groupby("strain", sort=False):
+for strain, g in batches.groupby("strain", sort=False):
     st.subheader(strain)
     sp, em = g[g.material == "Sperm"], g[g.material == "Embryo"]
     m1, m2, m3 = st.columns(3)

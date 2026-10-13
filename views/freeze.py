@@ -29,7 +29,7 @@ if existing_labs:
     lab = c6.selectbox("Lab", existing_labs)
 else:
     lab = ""
-    c6.warning("No labs yet — add one on the 'New Lab' page first.")
+    c6.warning("No labs yet — add one on the 'New gang joining!' page first.")
 agendo_id = c7.text_input("Agendo ID").strip()
 
 c4, c5 = st.columns(2)
@@ -50,14 +50,14 @@ if st.button("Save", type="primary"):
             f"{start_id}–{end_id} ({end_id - start_id + 1} straws)."
         )
     if not lab:
-        errors.append("Lab is required (add it on the 'New Lab' page).")
+        errors.append("Lab is required (add it on the 'New gang joining!' page).")
     if not shelf or not position:
         errors.append("Shelf ID and position are required.")
     if not errors:
         clash = db.overlap(strain, material, int(start_id), int(end_id))
         if not clash.empty:
             errors.append(
-                f"Straw IDs overlap an existing {material.lower()} batch for {strain} "
+                f"Straw IDs overlap (or reuse thawed IDs of) an existing {material.lower()} batch for {strain} "
                 f"({clash.iloc[0].start_id}–{clash.iloc[0].end_id} at "
                 f"{clash.iloc[0].shelf}/{clash.iloc[0].position})."
             )
