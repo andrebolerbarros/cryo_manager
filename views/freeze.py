@@ -2,7 +2,7 @@ import streamlit as st
 
 import db
 
-st.title("➕ Submit cryopreserved material")
+st.title("❄️ Let's get freezing")
 
 existing = db.strains()
 NEW = "➕ New strain…"
@@ -25,9 +25,11 @@ if material == "Embryo":
 
 c6, c7 = st.columns(2)
 existing_labs = db.labs()
-NEW_LAB = "➕ New lab…"
-lab_choice = c6.selectbox("Lab", [*existing_labs, NEW_LAB])
-lab = (c6.text_input("New lab name") if lab_choice == NEW_LAB else lab_choice).strip()
+if existing_labs:
+    lab = c6.selectbox("Lab", existing_labs)
+else:
+    lab = ""
+    c6.warning("No labs yet — add one on the 'New Lab' page first.")
 agendo_id = c7.text_input("Agendo ID").strip()
 
 c4, c5 = st.columns(2)
@@ -48,9 +50,7 @@ if st.button("Save", type="primary"):
             f"{start_id}–{end_id} ({end_id - start_id + 1} straws)."
         )
     if not lab:
-        errors.append("Lab is required.")
-    elif lab_choice == NEW_LAB and lab.casefold() in {l.casefold() for l in existing_labs}:
-        errors.append(f"Lab '{lab}' already exists (case-insensitive) — pick it from the list.")
+        errors.append("Lab is required (add it on the 'New Lab' page).")
     if not shelf or not position:
         errors.append("Shelf ID and position are required.")
     if not errors:

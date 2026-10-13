@@ -135,5 +135,5 @@ CARTOON = """
 st.markdown("<h1 style='text-align:center'>Mouse Cryo Manager</h1>", unsafe_allow_html=True)
 components.html(CARTOON, height=390)
 st.markdown(
-    "Use the sidebar to **submit** new straws or **search** the freezer inventory by line name."
+    "Use the sidebar to **freeze** new straws, **warm up** (thaw) existing ones, or **search** the inventory by line name."
 )
