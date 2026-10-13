@@ -63,7 +63,13 @@ if not saved:
 else:
     st.caption("Age = whole weeks since birth, calculated against today; animals of the same sex "
                "and the same number of weeks are merged.")
-    for r in saved:
+    # entries with the same Agendo request ID + strain + lab share one section and one table
+    sections: dict[tuple, dict] = {}
+    for r in saved:  # newest first, so a section shows the newest entry's spelling
+        key = tuple(r[k].strip().casefold() for k in ("agendo_id", "strain_id", "lab"))
+        sec = sections.setdefault(key, {**r, "animals": []})
+        sec["animals"] += r["animals"]
+    for r in sections.values():
         st.markdown(f"### {r['strain_id']}\n"
                     f"- **Lab:** {r['lab'] or '—'}\n"
                     f"- **Agendo request ID:** {r['agendo_id']}")
