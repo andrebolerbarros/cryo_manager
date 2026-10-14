@@ -21,27 +21,52 @@ export CRYO_DATABASE_URL="postgresql+psycopg2://cryo_app:PASSWORD@db-host:5432/c
 streamlit run streamlit_app.py
 ```
 
-Tables are created on first start and a toy dataset is loaded into an empty database (batches, straws,
-labs, requests, plans). To start from the toy data again, empty the tables or use a new database/SQLite file.
+Tables are created on first start and a toy dataset is loaded into an empty database. To start from
+the toy data again, use a new database/SQLite file.
 
-**Moving an existing `cryo.db` to the server database** (keeps IDs and thaw history, refuses a
-non-empty target unless `--force`, checks row counts at the end):
+### Tables
+
+| Table | One row is | Main columns |
+|---|---|---|
+| `labs` | a lab | name, institute, `running` (closed labs leave the dropdowns but are never deleted) |
+| `strains` | a strain | name, associated lab |
+| `requests` | an Agendo request | internal id, `agendo_id` (unique, can be corrected), strain, lab |
+| `batches` | one freezing session of a request | request, status `planned` / `frozen` / `cancelled`, dates |
+| `batch_animals` | animals of a batch | sex, DOB, number |
+| `straws` | one physical straw | global straw number, material, embryos, shelf, position, `thawed_at` |
+
+Sperm straws, embryo straws and the embryo total of a batch are derived from its straws, not stored
+twice (see "Frozen batches" on the freezing page). Straw numbers are global and never reused,
+including thawed ones.
+
+### Upgrading and moving data
+
+A database in the previous layout (strain, lab and location on `batches`, a `plans` table) is
+upgraded automatically on first start: the old tables are kept as `legacy_*` and the data is copied
+into the new tables. Straw numbers were only unique per strain and material before, so they are
+**renumbered 1..N** to make them global; check that against the physical labels if the data is real.
+
+**Moving an existing `cryo.db` to the server database** (keeps IDs and thaw history; the source file
+is not modified; refuses a non-empty target unless `--force`; checks row counts at the end):
 
 ```bash
 python migrate_sqlite_to_sql.py --source cryo.db --target postgresql+psycopg2://cryo_app:PASSWORD@db-host:5432/cryo
 ```
 
-Notes: lab names and Agendo IDs are unique case-insensitively (functional index on `lower(...)`);
-thawing locks the selected straws (`SELECT ... FOR UPDATE`) so two sessions cannot thaw the same straw.
-Do not commit credentials: `secrets.toml` is git-ignored.
+Notes: lab names, strain names and Agendo IDs are unique case-insensitively (functional index on
+`lower(...)`); freezing and thawing lock the rows involved (`SELECT ... FOR UPDATE`) so two sessions
+cannot take the same straw. Do not commit credentials: `secrets.toml` is git-ignored.
 
 ## Pages
-- **Let's get freezing**: one row = one contiguous block of straw IDs in one shelf position.
+- **Winter is coming**: requests (Agendo ID, strain, lab), then *Plan animals*: pick a request and enter
+  Sex / DOB / Number rows. This creates a **planned batch**; planned batches show with age in whole
+  weeks and can be cancelled.
+- **Let's get freezing**: pick a planned batch, add blocks of straws (material, how many, first global
+  straw ID, shelf, position, embryos per straw), correct single straws in the table (embryos are
+  recorded per straw), and save: the batch becomes `frozen`. A batch can mix sperm and embryo straws
+  and several locations.
 - **Let's warm up!**: tick individual straws and press *warm it up!*; thawed straws leave the inventory
-  (kept in the DB with a timestamp, so straw IDs are never reused).
+  (kept in the database with a timestamp, so straw IDs are never reused).
 - **Search**: substring match on line name; totals shown per line.
-- **Winter is coming**: *Open Requests* (Agendo ID → strain + lab; a toy list is seeded) and a form where
-  picking an Agendo ID fills strain and lab, then Sex / DOB / Number rows. All planned animals show in one
-  table with age in whole weeks; entries for the same request are combined.
 - **Look at my kingdom!**: pick a lab; table of embryos, embryo straws and sperm straws per strain.
-- **New gang joining!**: add labs; they feed the Lab dropdown.
+- **New gang joining!**: add and edit labs (institute, running) and strains (with their lab).

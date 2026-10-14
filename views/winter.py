@@ -9,23 +9,32 @@ st.title("🐺 Winter is coming")
 for msg in st.session_state.pop("flash_winter", []):
     st.success(msg)
 
-# ---------------------------------------------------------------- open requests
-st.subheader("Open Requests")
+# ---------------------------------------------------------------- requests
+st.subheader("Requests")
 requests = db.requests()
 if requests:
     st.dataframe(
-        [{"Agendo ID": r["agendo_id"], "Strain": r["strain_id"], "Lab": r["lab"]} for r in requests],
+        [{"Agendo ID": r["agendo_id"] or "—", "Strain": r["strain"], "Lab": r["lab"]} for r in requests],
         hide_index=True, use_container_width=True,
     )
 else:
-    st.caption("No open requests yet.")
+    st.caption("No requests yet.")
 
 with st.expander("Add a new request"):
+    NEW = "➕ New strain…"
+    known_strains = db.strains()
+    strain_lab = dict(zip(db.strains_table().name, db.strains_table().lab))
+    running_labs = db.labs()
+
     n1, n2, n3 = st.columns(3)
     new_agendo = n1.text_input("Agendo ID", key="nr_agendo").strip()
-    new_strain = n2.text_input("Strain ID", key="nr_strain").strip()
-    known_labs = db.labs()
-    new_lab = n3.selectbox("Lab", known_labs, key="nr_lab") if known_labs else ""
+    choice = n2.selectbox("Strain", [*known_strains, NEW], key="nr_strain")
+    new_strain = (st.text_input("New strain name", key="nr_strain_new") if choice == NEW else choice).strip()
+    default_lab = strain_lab.get(choice)
+    new_lab = n3.selectbox(
+        "Lab", running_labs, key=f"nr_lab_{choice}",
+        index=running_labs.index(default_lab) if default_lab in running_labs else 0,
+    ) if running_labs else ""
     if st.button("Add request"):
         if not (new_agendo and new_strain and new_lab):
             st.error("Agendo ID, strain and lab are all required (labs are added on 'New gang joining!').")
@@ -42,14 +51,15 @@ if not requests:
     st.stop()
 
 v = st.session_state.setdefault("winter_v", 0)  # bump to clear the form after a successful save
-by_id = {r["agendo_id"]: r for r in requests}
+by_id = {r["id"]: r for r in requests}
 
 c1, c2, c3 = st.columns(3)
-agendo_id = c1.selectbox("Agendo ID", list(by_id), key=f"w_agendo_{v}")
-req = by_id[agendo_id]
-# keys include the Agendo ID so the greyed-out fields refresh when the selection changes
-c2.text_input("Strain ID", value=req["strain_id"], disabled=True, key=f"w_strain_{v}_{agendo_id}")
-c3.text_input("Lab", value=req["lab"], disabled=True, key=f"w_lab_{v}_{agendo_id}")
+req_id = c1.selectbox("Request", list(by_id), key=f"w_req_{v}",
+                      format_func=lambda i: by_id[i]["agendo_id"] or f"(no Agendo ID, #{i})")
+req = by_id[req_id]
+# keys include the request id so the greyed-out fields refresh when the selection changes
+c2.text_input("Strain", value=req["strain"], disabled=True, key=f"w_strain_{v}_{req_id}")
+c3.text_input("Lab", value=req["lab"], disabled=True, key=f"w_lab_{v}_{req_id}")
 
 st.markdown("**Animals** — one row per sex × DOB (“+” top right adds a row)")
 empty = pd.DataFrame({
@@ -72,31 +82,39 @@ if st.button("Let's get planning!", type="primary"):
         for e in errors:
             st.error(e)
     else:
-        db.add_plan(req["agendo_id"], req["strain_id"], req["lab"], animals)
+        db.add_plan(req["id"], animals)
         st.session_state["flash_winter"] = [
-            f"Planned {req['strain_id']} ({req['lab']}, {req['agendo_id']}): "
+            f"Planned {req['strain']} ({req['lab']}, {req['agendo_id'] or 'no Agendo ID'}): "
             f"{plans.format_animals(animals)}"]
         st.session_state["winter_v"] = v + 1
         st.rerun()
 
-# ---------------------------------------------------------------- planned entries (one table)
-st.subheader("Planned entries")
-saved = db.plans()
+# ---------------------------------------------------------------- planned batches
+st.subheader("Planned batches")
+saved = db.plans("planned")
 if not saved:
     st.caption("Nothing planned yet.")
 else:
-    st.caption("Age = whole weeks since birth, calculated against today; entries with the same Agendo ID, "
-               "strain and lab are combined, and animals of the same sex and number of weeks are merged.")
-    groups: dict[tuple, dict] = {}
-    for r in saved:  # newest first
-        key = tuple(r[k].strip().casefold() for k in ("agendo_id", "strain_id", "lab"))
-        g = groups.setdefault(key, {**r, "animals": []})
-        g["animals"] += r["animals"]
+    st.caption("Age = whole weeks since birth, calculated against today; animals of the same sex and "
+               "number of weeks are merged. A planned batch is frozen on the \"Let's get freezing\" page.")
     table = []
-    for g in groups.values():
-        for row in plans.merge_by_weeks(g["animals"]):
+    for b in saved:
+        for row in plans.merge_by_weeks(b["animals"]):
             table.append({
-                "Strain ID": g["strain_id"], "Lab": g["lab"] or "—", "Agendo request ID": g["agendo_id"],
+                "Strain": b["strain"], "Lab": b["lab"] or "—", "Agendo ID": b["agendo_id"] or "—",
                 "Sex × age": plans.format_sex_age(row), "DOB": plans.format_dobs(row),
             })
     st.dataframe(table, hide_index=True, use_container_width=True)
+
+    with st.expander("Cancel a plan"):
+        opts = {b["batch_id"]: f"{b['agendo_id'] or 'no Agendo ID'} · {b['strain']} · "
+                               f"{plans.format_animals(b['animals'])}" for b in saved}
+        to_cancel = st.selectbox("Plan", list(opts), format_func=opts.get, key="cancel_pick")
+        if st.button("Cancel this plan"):
+            try:
+                db.cancel_plan(int(to_cancel))
+            except ValueError as e:
+                st.error(str(e))
+            else:
+                st.session_state["flash_winter"] = [f"Cancelled plan: {opts[to_cancel]}."]
+                st.rerun()
